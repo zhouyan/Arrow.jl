@@ -139,6 +139,12 @@ function ArrowField(name::AbstractString, ::Type{T}) where {T <: NamedTuple}
     ret
 end
 
+function ArrowField(name::AbstractString, ::Type{T}) where {T <: Tuple}
+    ret = ArrowField(name, ArrowUnion(ArrowSparse,Int32[]))
+    append!(ret.children, ArrowField.("", x.types))
+    ret
+end
+
 struct ArrowBuffer
     offset::Int64
     length::Int64
@@ -162,6 +168,10 @@ jltype(typ::ArrowList, field::ArrowField) = Vector{jltype(field.children[1])}
 
 function jltype(typ::ArrowStruct, field::ArrowField)
     NamedTuple{tuple([Symbol(v.name) for v in field.children]...), Tuple{jltype.(field.children)...}}
+end
+
+function jltype(typ::ArrowUnion, field::ArrowField)
+    Tuple{jltype.(field.chidren)...}
 end
 
 ###############################################################################
@@ -294,8 +304,6 @@ arrowtype(::Type{FixedSizeBinary{W}}) where {W} = ArrowFixedSizeBinary(W)
 # Type mapping for composite Arrow types
 ###############################################################################
 
-# TODO List
-# TODO Struct
 # TODO Union
 # TODO FixedSizeList
 # TODO Map
