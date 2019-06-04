@@ -159,23 +159,7 @@ end
 FlatBuffers.@DEFAULT ArrowSchema endianness = ArrowLittle
 
 ###############################################################################
-# From fields to Arrow type
-###############################################################################
-
-jltype(field::ArrowField) = jltype(field.typ, field)
-jltype(typ::ArrowType, field::ArrowField) = jltype(typ)
-jltype(typ::ArrowList, field::ArrowField) = Vector{jltype(field.children[1])}
-
-function jltype(typ::ArrowStruct, field::ArrowField)
-    NamedTuple{tuple([Symbol(v.name) for v in field.children]...), Tuple{jltype.(field.children)...}}
-end
-
-function jltype(typ::ArrowUnion, field::ArrowField)
-    Tuple{jltype.(field.chidren)...}
-end
-
-###############################################################################
-# Bytes types
+# Julia types
 ###############################################################################
 
 # Type to distinguish between List<UInt8> and Binary
@@ -192,10 +176,6 @@ struct FixedSizeBinary{N}
         new(v)
     end
 end
-
-###############################################################################
-# Datetime types
-###############################################################################
 
 const DateUnit = Union{Dates.Day,Dates.Millisecond}
 
@@ -220,27 +200,34 @@ struct Decimal{P,S} # TODO
     value::UInt128
 end
 
-###############################################################################
-# Type mapping for composite Arrow types
-###############################################################################
+struct Interval{U}
+    value::Int32
+end
 
 ###############################################################################
-# Type mapping for singleton Arrow types
+# From Field to Julia type
+###############################################################################
+
+jltype(field::ArrowField) = jltype(field.typ, field)
+jltype(typ::ArrowType, field::ArrowField) = jltype(typ)
+jltype(typ::ArrowList, field::ArrowField) = Vector{jltype(field.children[1])}
+
+function jltype(typ::ArrowStruct, field::ArrowField)
+    NamedTuple{tuple([Symbol(v.name) for v in field.children]...), Tuple{jltype.(field.children)...}}
+end
+
+function jltype(typ::ArrowUnion, field::ArrowField)
+    Tuple{jltype.(field.chidren)...}
+end
+
+###############################################################################
+# From ArrowType to Julia type
 ###############################################################################
 
 jltype(::ArrowNull)   = Missing
 jltype(::ArrowBool)   = Bool
 jltype(::ArrowString) = String
 jltype(::ArrowBinary) = Binary
-
-arrowtype(::Type{Missing})        = arrownull
-arrowtype(::Type{Bool})           = arrowbool
-arrowtype(::Type{AbstractString}) = arrowstring
-arrowtype(::Type{Binary})         = arrowbinary
-
-###############################################################################
-# Type mapping for parameteric Arrow types
-###############################################################################
 
 abstract type ArrowIntType{W,S} end
 jltype(::Type{ArrowIntType{8, true}})  = Int8
@@ -253,26 +240,16 @@ jltype(::Type{ArrowIntType{32,false}}) = UInt32
 jltype(::Type{ArrowIntType{64,false}}) = UInt64
 jltype(x::ArrowInt) = jltype(ArrowIntType{x.bitWidth,x.is_signed})
 
-arrowtype(::Type{T}) where {T <: Signed}   = ArrowInt(sizeof(T) * 8, true)
-arrowtype(::Type{T}) where {T <: Unsigned} = ArrowInt(sizeof(T) * 8, false)
-
 abstract type ArrowFloatType{P} end
 jltype(::Type{ArrowFloatType{ArrowHalf}})   = Float16
 jltype(::Type{ArrowFloatType{ArrowSingle}}) = Float32
 jltype(::Type{ArrowFloatType{ArrowDouble}}) = Float64
 jltype(x::ArrowFloatingPoint) = jltype(ArrowFloatType{x.precision})
 
-arrowtype(::Type{Float16}) = ArrowFloatingPoint(ArrowHalf)
-arrowtype(::Type{Float32}) = ArrowFloatingPoint(ArrowSingle)
-arrowtype(::Type{Float64}) = ArrowFloatingPoint(ArrowDouble)
-
 abstract type ArrowDateType{U} end
 jltype(::Type{ArrowDateType{ArrowDate32}}) = Date32
 jltype(::Type{ArrowDateType{ArrowDate64}}) = Date64
 jltype(x::ArrowDate) = jltype(ArrowDateType{x.unit})
-
-arrowtype(::Type{Date32}) = ArrowDate(ArrowDa32)
-arrowtype(::Type{Date64}) = ArrowDate(ArrowDa64)
 
 abstract type ArrowTimeUnitType{U} end
 jltype(::Type{ArrowTimeUnitType{ArrowSecond}})      = Dates.Second
@@ -280,30 +257,45 @@ jltype(::Type{ArrowTimeUnitType{ArrowMillisecond}}) = Dates.Millisecond
 jltype(::Type{ArrowTimeUnitType{ArrowMicrosecond}}) = Dates.Microsecond
 jltype(::Type{ArrowTimeUnitType{ArrowNanosecond}})  = Dates.Nanosecond
 jltype(x::ArrowTimeUnit) = jltype(ArrowTimeUnit{x})
+jltype(x::ArrowTime)      = TimeOfDay{jltype(ArrowTimeUnitType{x.unit}),jltype(ArrowInt(x.bitWidth,true))}
+jltype(x::ArrowTimestamp) = Timestamp{jltype(ArrowTimeUnitType{x.unit})}
+
+jltype(x::ArrowDecimal) = Decimal{Int(x.precision),Int(x.scale)}
+jltype(x::ArrowFixedSizeBinary) = FixedSizeBinary{Int(x.bytewidth)}
+jltype(x::ArrowInterval) = Interval{x.unit}
+
+# TODO FixedSizeList
+# TODO Map
+
+###############################################################################
+# From Julia types to ArrowType
+###############################################################################
+
+arrowtype(::Type{Missing})        = arrownull
+arrowtype(::Type{Bool})           = arrowbool
+arrowtype(::Type{AbstractString}) = arrowstring
+arrowtype(::Type{Binary})         = arrowbinary
+
+arrowtype(::Type{T}) where {T <: Signed}   = ArrowInt(sizeof(T) * 8, true)
+arrowtype(::Type{T}) where {T <: Unsigned} = ArrowInt(sizeof(T) * 8, false)
+
+arrowtype(::Type{Float16}) = ArrowFloatingPoint(ArrowHalf)
+arrowtype(::Type{Float32}) = ArrowFloatingPoint(ArrowSingle)
+arrowtype(::Type{Float64}) = ArrowFloatingPoint(ArrowDouble)
+
+arrowtype(::Type{Date32}) = ArrowDate(ArrowDa32)
+arrowtype(::Type{Date64}) = ArrowDate(ArrowDa64)
 
 arrowtimeunit(::Type{Dates.Second})      = ArrowSecond
 arrowtimeunit(::Type{Dates.Millisecond}) = ArrowMillisecond
 arrowtimeunit(::Type{Dates.Microsecond}) = ArrowMicrosecond
 arrowtimeunit(::Type{Dates.Nanosecond})  = ArrowNanosecond
-
-jltype(x::ArrowTime)      = TimeOfDay{jltype(ArrowTimeUnitType{x.unit}),jltype(ArrowInt(x.bitWidth,true))}
-jltype(x::ArrowTimestamp) = Timestamp{jltype(ArrowTimeUnitType{x.unit})}
-
 arrowtype(::Type{TimeOfDay{P,T}}) where {P,T} = ArrowTime(arrowtimeunit(P),sizeof(T) * 8)
 arrowtype(::Type{Timestamp{P}})   where {P}   = ArrowTimestamp(arrowtimeunit(P))
 
-jltype(x::ArrowDecimal) = Decimal{Int(x.precision),Int(x.scale)}
 arrowtype(::Type{Decimal{P,S}}) where {P,S} = ArrowDecimal(P,S)
-
-jltype(x::ArrowFixedSizeBinary) = FixedSizeBinary{Int(x.bytewidth)}
 arrowtype(::Type{FixedSizeBinary{W}}) where {W} = ArrowFixedSizeBinary(W)
+arrowtype(::Type{Interval{U}} where {U} = ArrowInterval(U)
 
-# TODO interval
-
-###############################################################################
-# Type mapping for composite Arrow types
-###############################################################################
-
-# TODO Union
 # TODO FixedSizeList
 # TODO Map
